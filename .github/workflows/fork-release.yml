@@ -1,0 +1,78 @@
+name: Fork release
+# Todo push na main vira uma versão nova só para Windows x64: incrementa o PATCH,
+# compila com cache do Rust, assina o arquivo de atualização e publica no GitHub
+# Releases deste fork (os apps instalados recebem a atualização pelo próprio app).
+# O commit "release: vX" feito aqui não dispara de novo: push com GITHUB_TOKEN
+# não inicia workflows.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fork-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: ${{ !startsWith(github.event.head_commit.message, 'release:') }}
+    runs-on: windows-2022
+    timeout-minutes: 90
+    env:
+      RELEASE_TARGET: windows-x86_64
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with: { node-version: '22', cache: npm }
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: npm ci
+      - name: Definir a próxima versão
+        id: version
+        shell: bash
+        run: |
+          current=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          next=$(node -e "const [a,b,c]='$current'.split('.').map(Number); console.log([a,b,c+1].join('.'))")
+          # Se a tag já existe (ex.: versão subida à mão), segue em frente até uma livre.
+          while git ls-remote --exit-code --tags origin "refs/tags/v$next" >/dev/null 2>&1; do
+            next=$(node -e "const [a,b,c]='$next'.split('.').map(Number); console.log([a,b,c+1].join('.'))")
+          done
+          node scripts/release/set-version.mjs "$next"
+          echo "version=$next" >> "$GITHUB_OUTPUT"
+      - name: Gerar instalador
+        run: node scripts/release/build.mjs
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      - name: Publicar versão
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+        run: |
+          assets="release/$VERSION"
+          ls -l "$assets"
+          mkdir -p releases
+          printf '%s\n' "${COMMIT_MESSAGE:-Build manual do fork}" > "releases/$VERSION.md"
+          node scripts/release/updater-manifest.mjs "$assets" "$VERSION" "releases/$VERSION.md"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A -- package.json package-lock.json src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock website/src/data/release-dates.json "releases/$VERSION.md"
+          git commit -m "release: v$VERSION"
+          git tag "v$VERSION"
+          git push origin main "v$VERSION"
+          gh release create "v$VERSION" "$assets"/* \
+            --title "PandaCode $VERSION (fork)" \
+            --notes-file "releases/$VERSION.md" \
+            --target "$(git rev-parse HEAD)"
