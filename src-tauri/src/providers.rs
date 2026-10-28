@@ -888,7 +888,7 @@ fn parse_claude_models(result: &Value) -> Result<Vec<ModelInfo>, String> {
     let entries = result["models"].as_array().ok_or(
         "Claude did not return a model catalog; update the CLI or enter a custom model ID",
     )?;
-    if entries.len() > 1000 {
+    if entries.len() > 100 {
         return Err("Claude model catalog is too large".into());
     }
     let mut models = vec![ModelInfo::default_choice()];
@@ -2486,7 +2486,9 @@ impl Protocol {
                     let command = string(&value["request"]["input"], "command");
                     // Questions need structured answers; a boolean allow must not silently submit one.
                     if name == "AskUserQuestion" {
-                        step.write.push(json!({"type":"control_response","response":{"subtype":"success","request_id":value["request_id"],"response":{"behavior":"deny","message":"Ask the user in your response; this UI supports free-text replies."}}}));
+                        if !self.claude_question(&value, &mut step) {
+                            step.write.push(json!({"type":"control_response","response":{"subtype":"success","request_id":value["request_id"],"response":{"behavior":"deny","message":"Ask the user in your response; this UI supports free-text replies."}}}));
+                        }
                     } else if name.strip_prefix("mcp__pandacode_architect__").is_some_and(|tool| optional_metadata_tool(tool) || crate::bots::tools::self_scoped(tool) || crate::architect::team_tool(tool))
                         && self.mcp_tool_names.contains(&name)
                     {
@@ -2521,6 +2523,18 @@ impl Protocol {
                 for id in cancelled {
                     self.pending.remove(&id);
                     let mut event = self.event("approval_cancelled", "", None);
+                    event.request_id = Some(id);
+                    step.events.push(event);
+                }
+                let questions: Vec<_> = self
+                    .inputs
+                    .iter()
+                    .filter(|(_, request)| request["claude"]["request_id"] == value["request_id"])
+                    .map(|(id, _)| id.clone())
+                    .collect();
+                for id in questions {
+                    self.inputs.remove(&id);
+                    let mut event = self.event("input_cancelled", "", None);
                     event.request_id = Some(id);
                     step.events.push(event);
                 }
@@ -4514,6 +4528,53 @@ mod tests {
         assert_eq!(step.write[0]["result"]["outcome"]["outcome"], "cancelled");
         assert!(p.pending.is_empty());
         assert!(step.events.iter().all(|e| e.kind != "approval"));
+    }
+
+    #[test]
+    fn claude_ask_user_question_becomes_a_clickable_card_and_answers_by_question_text() {
+        let mut p = Protocol::new(config("claude"));
+        let input = json!({"questions":[{"question":"Which database?","header":"Database","multiSelect":false,"options":[{"label":"Postgres","description":"Relational"},{"label":"SQLite","description":"Embedded"}]}]});
+        let step = p.receive(json!({"type":"control_request","request_id":"ask-1","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","input":input}})).unwrap();
+        assert!(step.write.is_empty());
+        let event = step.events.iter().find(|e| e.kind == "input_request").unwrap();
+        let id = event.request_id.clone().unwrap();
+        assert_eq!(event.data.as_ref().unwrap()["questions"][0]["options"][1]["label"], "SQLite");
+        assert!(p.user_input(&id, json!({"answers":{"q0":["MySQL"]}})).is_ok(), "free text is allowed (isOther)");
+
+        let mut p = Protocol::new(config("claude"));
+        let step = p.receive(json!({"type":"control_request","request_id":"ask-2","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","input":input}})).unwrap();
+        let id = step.events.iter().find(|e| e.kind == "input_request").unwrap().request_id.clone().unwrap();
+        let done = p.user_input(&id, json!({"answers":{"q0":["SQLite"]}})).unwrap();
+        let reply = &done.write[0]["response"];
+        assert_eq!(reply["request_id"], "ask-2");
+        assert_eq!(reply["response"]["behavior"], "allow");
+        assert_eq!(reply["response"]["updatedInput"]["answers"]["Which database?"], "SQLite");
+        assert!(done.events.iter().any(|e| e.kind == "input_cancelled"));
+    }
+
+    #[test]
+    fn claude_ask_user_question_stopped_or_cancelled_is_denied_not_left_hanging() {
+        let mut p = Protocol::new(config("claude"));
+        let input = json!({"questions":[{"question":"Proceed?","header":"Go","options":[{"label":"Yes","description":""},{"label":"No","description":""}]}]});
+        p.receive(json!({"type":"control_request","request_id":"ask-3","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","input":input}})).unwrap();
+        let step = p.cancel_requests();
+        assert_eq!(step.write[0]["response"]["request_id"], "ask-3");
+        assert_eq!(step.write[0]["response"]["response"]["behavior"], "deny");
+        assert!(p.inputs.is_empty());
+
+        let mut p = Protocol::new(config("claude"));
+        p.receive(json!({"type":"control_request","request_id":"ask-4","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","input":input}})).unwrap();
+        let step = p.receive(json!({"type":"control_cancel_request","request_id":"ask-4"})).unwrap();
+        assert!(step.events.iter().any(|e| e.kind == "input_cancelled"));
+        assert!(p.inputs.is_empty());
+    }
+
+    #[test]
+    fn claude_ask_user_question_without_questions_falls_back_to_a_denial() {
+        let mut p = Protocol::new(config("claude"));
+        let step = p.receive(json!({"type":"control_request","request_id":"ask-5","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","input":{}}})).unwrap();
+        assert_eq!(step.write[0]["response"]["response"]["behavior"], "deny");
+        assert!(step.events.iter().all(|e| e.kind != "input_request"));
     }
 
     #[test]

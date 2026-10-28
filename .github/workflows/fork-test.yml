@@ -1,0 +1,34 @@
+name: Fork test
+# Roda no GitHub (não na sua máquina) os testes do app em toda branch do fork
+# que não seja a main, e também sob demanda. A main já passa pelo "Fork release".
+on:
+  push:
+    branches-ignore: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: windows-2022
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with: { node-version: '22', cache: npm }
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: npm ci
+      # O build do Tauri exige o frontend compilado (frontendDist).
+      - run: npm run build
+      - name: Testes do app (Rust)
+        run: cargo test --manifest-path src-tauri/Cargo.toml --lib
+      - name: Testes do front-end
+        run: npm test

@@ -338,6 +338,64 @@ impl Protocol {
                 .push(json!({"id":request["id"],"error":{"code":-32602,"message":message}})),
         }
     }
+    /// Shows Claude's `AskUserQuestion` as the same clickable question card the
+    /// other harnesses use. Returns false (nothing written) when it cannot be
+    /// shown, so the caller falls back to asking in the reply.
+    pub(super) fn claude_question(&mut self, value: &Value, step: &mut Step) -> bool {
+        let input = &value["request"]["input"];
+        let Some(list) = input["questions"].as_array() else {
+            return false;
+        };
+        if self.inputs.len() + self.pending.len() >= 64 {
+            return false;
+        }
+        let questions: Vec<Value> = list
+            .iter()
+            .enumerate()
+            .map(|(index, question)| {
+                let options = question["options"].as_array().map(|options| {
+                    options
+                        .iter()
+                        .map(|option| {
+                            json!({
+                                "label":option["label"],
+                                "description":option["description"].as_str().unwrap_or("")
+                            })
+                        })
+                        .collect::<Vec<_>>()
+                });
+                json!({
+                    "id":format!("q{index}"),
+                    "header":question["header"].as_str().unwrap_or(""),
+                    "question":question["question"],
+                    "isOther":true,
+                    "options":options
+                })
+            })
+            .collect();
+        let request = json!({
+            "id":value["request_id"],
+            "method":"item/tool/requestUserInput",
+            "params":{"questions":questions}
+        });
+        if host_inputs::normalize(&request).is_err() {
+            return false;
+        }
+        let before = step.events.len();
+        self.input_request(request, step);
+        let Some(id) = step
+            .events
+            .get(before)
+            .filter(|event| event.kind == "input_request")
+            .and_then(|event| event.request_id.clone())
+        else {
+            return false;
+        };
+        if let Some(entry) = self.inputs.get_mut(&id) {
+            entry["claude"] = json!({"request_id":value["request_id"],"input":input});
+        }
+        true
+    }
     pub(super) fn user_input(&mut self, id: &str, response: Value) -> Result<Step, String> {
         let request = self
             .inputs
@@ -349,8 +407,13 @@ impl Protocol {
         let request = self.inputs.remove(id).unwrap();
         let mut event = self.event("input_cancelled", "", None);
         event.request_id = Some(id.into());
+        let write = if request.get("claude").is_some() {
+            claude_question_answer(&request["claude"], &result)
+        } else {
+            json!({"id":request["id"],"result":result})
+        };
         Ok(Step {
-            write: vec![json!({"id":request["id"],"result":result})],
+            write: vec![write],
             events: vec![event],
             ..Step::default()
         })
@@ -399,6 +462,13 @@ impl Protocol {
         }
         let requests: Vec<_> = self.inputs.drain().collect();
         for (id, request) in requests {
+            if request.get("claude").is_some() {
+                step.write.push(claude_question_deny(&request["claude"]));
+                let mut event = self.event("input_cancelled", "", None);
+                event.request_id = Some(id);
+                step.events.push(event);
+                continue;
+            }
             let response = if request["method"] == "item/tool/requestUserInput" {
                 json!({"answers":{}})
             } else {
@@ -890,4 +960,30 @@ printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thread","turn":{
             .unwrap()
             .unwrap();
     }
+}
+
+fn claude_question_deny(claude: &Value) -> Value {
+    json!({"type":"control_response","response":{"subtype":"success","request_id":claude["request_id"],"response":{"behavior":"deny","message":"The user dismissed the question without answering."}}})
+}
+
+/// Claude expects `answers` keyed by the question text, one string per question.
+fn claude_question_answer(claude: &Value, result: &Value) -> Value {
+    let mut answers = serde_json::Map::new();
+    for (index, question) in claude["input"]["questions"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .enumerate()
+    {
+        let chosen = &result["answers"][format!("q{index}")]["answers"][0];
+        if let (Some(text), Some(answer)) = (question["question"].as_str(), chosen.as_str()) {
+            answers.insert(text.to_owned(), json!(answer));
+        }
+    }
+    if answers.is_empty() {
+        return claude_question_deny(claude);
+    }
+    let mut updated = claude["input"].clone();
+    updated["answers"] = Value::Object(answers);
+    json!({"type":"control_response","response":{"subtype":"success","request_id":claude["request_id"],"response":{"behavior":"allow","updatedInput":updated}}})
 }

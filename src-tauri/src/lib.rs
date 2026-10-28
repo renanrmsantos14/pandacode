@@ -536,7 +536,7 @@ impl AppState {
 /// Projectless chats have nothing to run, so they skip the run script.
 fn app_instructions(chat: bool) -> String {
     let run = if chat { "" } else { run_script::INSTRUCTIONS };
-    [session_titles::GUIDANCE, run, turn_changes::instruction(), TURN_ENDS, RICH_QUESTIONS, GENERATIVE_UI].concat()
+    [session_titles::GUIDANCE, run, turn_changes::instruction(), TURN_ENDS, RICH_QUESTIONS, GENERATIVE_UI, NEXT_STEP].concat()
 }
 
 /// PandaCode closes the harness when a turn ends, so background waits never come back.
@@ -547,6 +547,9 @@ const RICH_QUESTIONS: &str = "\n\nQuestions you ask through the request_user_inp
 
 /// Replies may carry generative UI blocks that PandaCode draws in the thread.
 const GENERATIVE_UI: &str = "\n\nGenerative UI: when a visual beats prose, a reply may include a ```ui block holding JSON {\"type\":…}; ```chart, ```svg and ```html work too. Types (fields): callout(tone info|success|warning|danger|note,title,body), card(title,body,footer,actions,children), stats(items[{label,value,delta,hint,spark[]}]), table(title,columns[],rows[[…]]), chart(chart bar|line|pie|area|sparkline,title,labels,series[{name,values}]), progress(label,value,max), plan|steps|timeline(title,summary,items[{title,detail,status done|active|pending|error|skipped,time}],actions), checklist(items[{text,done}]), tabs|accordion(items[{label,body,children}]), tree(paths[] or items[{name,status,children}]), diff(file,diff), code(file,language,code), terminal(command,output,exitCode), compare(items[{title,pros,cons,verdict}]), gallery(images[{path,caption}]), actions(buttons[{label,prompt,tone}]), chips|followups(options[{label,prompt}]), or inline :codex-followup[Label]{prompt=\"…\"}, form(title,fields[{name,label,type text|textarea|number|select|checkbox,options}],submit,prompt with {name}), stack|grid(columns,children), custom(html,css,state; data-ui-toggle=\"#id\", data-ui-tab/data-ui-panel, data-ui-set=\"k=v\", data-ui-bind=\"k\", data-ui-prompt). Bodies are Markdown. Buttons and forms only put a prompt in the user's composer; nothing runs, and remote URLs are not loaded. ```mermaid shows as labelled source. For a page that needs scripts, write an HTML file and open it with pandacode_preview_file.";
+
+/// A turn that leaves the user a decision ends with a "next step" card instead of a prose question.
+const NEXT_STEP: &str = "\n\nNext step: when a turn ends with something only the user can decide or do (a choice, a go-ahead to commit, push or publish, an approval), finish the reply with one ```ui block of type card: title = the single decision as a short question, body = a two-sentence recap of what is now true and what is not verified, actions = one to three buttons {label (1-3 words), prompt (the message the click sends, in the user's words), tone}, your recommended button first. Do not add the card when nothing waits on the user, and never restate it in prose.";
 
 /// Harnesses without a system prompt hear the app instructions again every few turns.
 const INSTRUCTION_REMINDER_EVERY: i64 = 8;
