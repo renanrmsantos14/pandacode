@@ -150,7 +150,10 @@ fn toggle(app: &AppHandle, rect: Rect) -> tauri::Result<()> {
         window.on_window_event(move |event| {
             if matches!(event, tauri::WindowEvent::Focused(false)) {
                 *lock(&BLURRED) = Some(Instant::now());
-                hide(&handle);
+                // Deferred: hiding sends focus messages synchronously, which
+                // would re-enter this listener while Tauri holds its lock.
+                let hider = handle.clone();
+                let _ = handle.run_on_main_thread(move || hide(&hider));
             }
         });
         open(app, &window, rect)

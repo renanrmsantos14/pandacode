@@ -528,7 +528,12 @@ fn toggle(app: &tauri::AppHandle) -> Result<()> {
     let handle = app.clone();
     window.on_window_event(move |event| {
         if matches!(event, tauri::WindowEvent::Focused(false)) {
-            let _ = hide(&handle);
+            // Deferred: hiding sends focus messages synchronously, which
+            // would re-enter this listener while Tauri holds its lock.
+            let hider = handle.clone();
+            let _ = handle.run_on_main_thread(move || {
+                let _ = hide(&hider);
+            });
         }
     });
     position_near_cursor(app, &window);

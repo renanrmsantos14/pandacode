@@ -425,9 +425,15 @@ fn create_dock_window(app: AppHandle) -> crate::Result<()> {
             } else {
                 *position
             };
+            // Tauri runs window listeners with their lock held, and on Windows
+            // set_position sends WM_MOVE synchronously, so moving from here
+            // would re-enter this listener and deadlock the main thread.
             if let Ok(current) = dock_window.outer_position() {
                 if current.x != position.x || current.y != position.y {
-                    let _ = dock_window.set_position(position);
+                    let mover = dock_window.clone();
+                    let _ = handle.run_on_main_thread(move || {
+                        let _ = mover.set_position(position);
+                    });
                 }
             }
             let state = handle.state::<DockState>();
