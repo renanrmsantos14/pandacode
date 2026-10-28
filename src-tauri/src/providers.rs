@@ -888,7 +888,7 @@ fn parse_claude_models(result: &Value) -> Result<Vec<ModelInfo>, String> {
     let entries = result["models"].as_array().ok_or(
         "Claude did not return a model catalog; update the CLI or enter a custom model ID",
     )?;
-    if entries.len() > 100 {
+    if entries.len() > 1000 {
         return Err("Claude model catalog is too large".into());
     }
     let mut models = vec![ModelInfo::default_choice()];
@@ -986,7 +986,7 @@ async fn claude_models(path: &Path) -> Result<Vec<ModelInfo>, String> {
             let mut consumed = 0;
             for end in bytes.iter().enumerate().filter_map(|(i, byte)| (*byte == b'\n').then_some(i)) {
                 let line = &bytes[consumed..end]; consumed = end + 1;
-                if line.len() > 256 * 1024 { return Err("Claude model catalog frame is too large".into()); }
+                if line.len() > 4 * 1024 * 1024 { return Err("Claude model catalog frame is too large".into()); }
                 if line.iter().all(u8::is_ascii_whitespace) { continue; }
                 let message: Value = serde_json::from_slice(line).map_err(|_| "Claude returned invalid model discovery JSON")?;
                 if message["type"] != "control_response" || message["response"]["request_id"] != "pandacode-models" { continue; }
@@ -995,7 +995,7 @@ async fn claude_models(path: &Path) -> Result<Vec<ModelInfo>, String> {
                 return parse_claude_models(&response["response"]);
             }
             bytes.drain(..consumed);
-            if bytes.len() > 256 * 1024 { return Err("Claude model catalog frame is too large".into()); }
+            if bytes.len() > 4 * 1024 * 1024 { return Err("Claude model catalog frame is too large".into()); }
         }
     }).await.unwrap_or_else(|_| Err("Claude model discovery timed out; check the CLI or enter a custom model ID".into()));
     drop(stdin);
@@ -1038,7 +1038,7 @@ async fn codex_models(path: &Path) -> Result<Vec<ModelInfo>, String> {
             for end in bytes.iter().enumerate().filter_map(|(i, byte)| (*byte == b'\n').then_some(i)) {
                 let line = &bytes[consumed..end];
                 consumed = end + 1;
-                if line.len() > 256 * 1024 { return Err("Codex model catalog frame is too large".into()); }
+                if line.len() > 4 * 1024 * 1024 { return Err("Codex model catalog frame is too large".into()); }
                 if line.iter().all(u8::is_ascii_whitespace) { continue; }
                 let message: Value = serde_json::from_slice(line).map_err(|_| "Codex returned invalid model discovery JSON")?;
                 if message["id"].as_u64() != Some(expected) || message.get("method").is_some() { continue; }
@@ -1052,7 +1052,7 @@ async fn codex_models(path: &Path) -> Result<Vec<ModelInfo>, String> {
                 expected = 2;
             }
             bytes.drain(..consumed);
-            if bytes.len() > 256 * 1024 { return Err("Codex model catalog frame is too large".into()); }
+            if bytes.len() > 4 * 1024 * 1024 { return Err("Codex model catalog frame is too large".into()); }
         }
     }).await.unwrap_or_else(|_| Err("Codex model discovery timed out; check the CLI or enter a custom model ID".into()));
     drop(stdin);
