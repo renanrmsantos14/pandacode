@@ -24,6 +24,12 @@ jobs:
     env:
       RELEASE_TARGET: windows-x86_64
       GH_TOKEN: ${{ github.token }}
+      # Compila mais rápido que o perfil release do projeto (LTO thin e 1 unidade serial):
+      # sem LTO, 16 unidades em paralelo e incremental para o próprio app. O binário fica
+      # um pouco maior; é o preço do tempo.
+      CARGO_PROFILE_RELEASE_LTO: 'off'
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: '16'
+      CARGO_PROFILE_RELEASE_INCREMENTAL: 'true'
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -37,6 +43,15 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          key: perfil-rapido
+          cache-workspace-crates: true
+      # O rust-cache descarta o incremental; este cache guarda o do app entre releases,
+      # para que só o código alterado seja recompilado.
+      - uses: actions/cache@v4
+        with:
+          path: src-tauri/target/x86_64-pc-windows-msvc/release/incremental
+          key: incremental-win-${{ github.run_id }}
+          restore-keys: incremental-win-
       - run: npm ci
       - name: Definir a próxima versão
         id: version
@@ -51,12 +66,10 @@ jobs:
           node scripts/release/set-version.mjs "$next"
           echo "version=$next" >> "$GITHUB_OUTPUT"
       - name: Gerar instalador
-        run: node scripts/release/build.mjs
+        run: |
+          $env:CARGO_INCREMENTAL = '1'
+          node scripts/release/build.mjs
         env:
-          # Compila mais rápido que o perfil release do projeto (LTO thin e 1 unidade serial):
-          # sem LTO e com 16 unidades em paralelo. O binário fica um pouco maior; é o preço do tempo.
-          CARGO_PROFILE_RELEASE_LTO: 'off'
-          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: '16'
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
       - name: Publicar versão
