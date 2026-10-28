@@ -53,6 +53,10 @@ jobs:
       - name: Gerar instalador
         run: node scripts/release/build.mjs
         env:
+          # Compila mais rápido que o perfil release do projeto (LTO thin e 1 unidade serial):
+          # sem LTO e com 16 unidades em paralelo. O binário fica um pouco maior; é o preço do tempo.
+          CARGO_PROFILE_RELEASE_LTO: 'off'
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: '16'
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
       - name: Publicar versão
